@@ -49,13 +49,18 @@ void dump_numa_info(struct nodemap *map, FILE *opt_file_out)
     fprintf(opt_file_out, "</numamap>\n");
 }
 
-
+/*
+ * Three types of page-tables can be dumped:
+ * 0: Regular host page tables
+ * 1: KVM VM's extended page tables
+ * 2: KVM VM's shadow page tables
+ */
 int main(int argc, char *argv[])
 {
     long c;
 
     if (argc < 3) {
-        printf("Usage: dodump <pid> <0|1> [outfile]\n");
+        printf("Usage: dodump <pid> <0|1|2> [outfile]\n");
         return -1;
     }
     
@@ -63,6 +68,12 @@ int main(int argc, char *argv[])
 
     if (pid == 0) {
         pid = getpid();
+    }
+    long pgtables_type = strtol(argv[2], NULL, 10);
+    if (!(pgtables_type == PTDUMP_REGULAR || pgtables_type == PTDUMP_ePT)) {
+        printf("Please enter a valid ptables identifier (argument #2). Valid values:\n");
+        printf("0\tHOST_PTABLES\n1\tEPT_PTABLES\n");
+        exit(0);
     }
 
     FILE *opt_file_out = NULL;
@@ -194,6 +205,10 @@ int main(int argc, char *argv[])
     
     free(result);
     close(f); 
-
+    #define CONFIG_SHM_FILE_NAME "/tmp/ptdump-bench"
+    FILE *fd = fopen(CONFIG_SHM_FILE_NAME ".done", "w");
+    if (!fd) {
+        fprintf (stderr, "ERROR: ptdump could not create the shared file descriptor\n");
+    }
     return 0;
 }
