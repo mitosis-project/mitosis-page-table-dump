@@ -86,13 +86,10 @@ typedef int (*ptdump_fn_t)( struct task_struct *task, pgd_t *start,
 // stores the proc fs file information
 static struct proc_dir_entry *ptdump_proc;
 
-///< stores a pointer to the mm-struct to be dumped
-struct mm_struct *mm = NULL;
-
 
 /*
  * ============================================================================
- * makro for checking accesses to the kernel Module
+ * macro for checking accesses to the kernel Module
  * ============================================================================
  */
 
@@ -142,8 +139,8 @@ union ptable_entry {
         uint64_t        accessed        :1;
         uint64_t        reserved        :3;
         uint64_t        available       :3;
-        uint64_t        base_addr       :28;
-        uint64_t        reserved2       :12;
+        uint64_t        base_addr       :32;
+        uint64_t        reserved2       :8;
         uint64_t        available2      :11;
         uint64_t        execute_disable :1;
     } pdir;
@@ -201,36 +198,263 @@ union ptable_entry {
     } base;
 };
 
+unsigned pgtables_type = 0;
+struct mm_struct *mm = NULL;
+struct kvm *kvm = NULL;
+
+/*
+ * ============================================================================
+ * Getting the KVM process id and ePT/sPT root
+ * ============================================================================
+ */
+static int get_kvm_by_vpid(pid_t nr)
+{
+	struct pid* pid;
+	struct task_struct* task;
+	struct files_struct* files;
+	int fd, max_fds;
+	rcu_read_lock();
+	if(!(pid = find_vpid(nr)))
+	{
+		rcu_read_unlock();
+		printk(KERN_DEBUG "[ptdump] no such process whose pid = %d\n", nr);
+		return -1;
+	}
+	if(!(task = pid_task(pid, PIDTYPE_PID)))
+	{
+		rcu_read_unlock();
+		printk(KERN_DEBUG "[ptdump] no such process whose pid = %d\n", nr);
+		return -1;
+	}
+	files = task->files;
+	max_fds = files_fdtable(files)->max_fds;
+	for(fd = 0; fd < max_fds; fd++)
+	{
+		struct file* file;
+		char buffer[32];
+		char* fname;
+		if(!(file = fcheck_files(files, fd)))
+			continue;
+		fname = d_path(&(file->f_path), buffer, sizeof(buffer));
+		if(fname < buffer || fname >= buffer + sizeof(buffer))
+			continue;
+		if(strcmp(fname, "anon_inode:kvm-vm") == 0)
+		{
+			kvm = file->private_data;
+			if (!kvm)
+				printk(KERN_DEBUG"[ptdump] KVM not found\n");
+			//kvm_get_kvm(kvm);
+			refcount_inc(&kvm->users_count);
+			break;
+		}
+	}
+	rcu_read_unlock();
+	if(!kvm) {
+		printk(KERN_DEBUG "[ptdump] process (pid = %d) has no kvm\n", nr);
+		return -1;
+	}
+	return 0;
+}
+
+#define virt_to_pfn(addr)	(__pa(addr) >> PAGE_SHIFT)
+long get_vcpu_spt_reach(pgd_t *root)
+{
+	long count = 0;
+	unsigned long long addr;
+	union ptable_entry *l4, *l3, *l2, *l1;
+	int i, j, k, l;
+
+	l4 = phys_to_virt(virt_to_phys(root) & ~0xfff);
+	if (!pfn_valid(virt_to_pfn(l4)))
+		return -1;
+
+	for (i = 0; i < 512; i++) {
+		if (!l4[i].pdir.present)
+			continue;
+
+		addr = (unsigned long long)l4[i].pdir.base_addr << 12;
+		l3 = phys_to_virt(addr);
+		if (!pfn_valid(virt_to_pfn(l3)))
+			return -1;
+
+		for(j = 0; j < 512; j++) {
+			if (!l3[j].pdir.present)
+				continue;
+
+			addr = (unsigned long long)l3[j].pdir.base_addr << 12;
+			l2 = phys_to_virt(addr);
+			if (!pfn_valid(virt_to_pfn(l2)))
+				return -1;
+
+			for (k = 0; k < 512; k++) {
+				if (!l2[k].pdir.present)
+					continue;
+
+				addr = (unsigned long long)l2[k].pdir.base_addr << 12;
+				l1 = phys_to_virt(addr);
+				if (!pfn_valid(virt_to_pfn(l1)))
+					return -1;
+
+				for (l = 0; l < 512; l++) {
+					if (!l1[l].pdir.present)
+						continue;
+
+					count++;
+				}
+			}
+		}
+	}
+	return count;
+}
+
+static int get_vcpu_shadow_root(uint64_t **rootp, int index)
+{
+	uint64_t root = 0;
+	int vcpu_count;
+	struct kvm_vcpu *vcpu;
+
+	vcpu_count = atomic_read(&(kvm->online_vcpus));
+	if (index >= vcpu_count) {
+		printk(KERN_DEBUG"[ptdump] vcpu %d is greater than online vcpus %d\n", index, vcpu_count);
+		return -1;
+	}
+	vcpu = kvm_get_vcpu(kvm, index);
+	if (!vcpu) {
+		printk(KERN_DEBUG"[ptdump] vcpu %d is not initialized\n", index);
+		return -1;
+	}
+	root = vcpu->arch.mmu.root_hpa;
+	if (!root || !VALID_PAGE(root)) {
+		printk(KERN_DEBUG"[ptdump] Invalid root for vcpu: %d\n", index);
+		return -1;
+	}
+	printk(KERN_DEBUG"[ptdump] Initiating Shadow Page Table Dump for vcpu:%d\n", index);
+	(*rootp) = (uint64_t *)__va(root);
+	return 0;
+}
+
+static int get_kvm_largest_shadow_root(uint64_t **rootp)
+{
+	long nr_pages = -1, max_pages = -1;
+	int i, ret = -1, vcpu_count, best_vcpu = -1;
+	struct kvm_vcpu *vcpu;
+
+	vcpu_count = atomic_read(&(kvm->online_vcpus));
+	for (i = 0; i < vcpu_count; i++) {
+		break;
+		vcpu = kvm_get_vcpu(kvm, i);
+		if (!vcpu)
+			continue;
+
+		if (!vcpu->arch.mmu.root_hpa || !VALID_PAGE(vcpu->arch.mmu.root_hpa))
+			continue;
+
+		nr_pages = get_vcpu_spt_reach((pgd_t *)__va(vcpu->arch.mmu.root_hpa));
+		if (nr_pages > max_pages) {
+			max_pages = nr_pages;
+			best_vcpu = i;
+		}
+	}
+	best_vcpu = 0;
+	if (best_vcpu == -1) {
+		printk(KERN_INFO"[ptdump] Couldn't find a VCPU to dump ptables\n");
+		*rootp = NULL;
+	} else {
+		best_vcpu = 0;
+		printk(KERN_INFO"[ptdump] Dumping SPT with VCPU: %d\n", best_vcpu);
+		ret = get_vcpu_shadow_root(rootp, best_vcpu);
+	}
+	return ret;
+}
+
+static int get_ept_root(uint64_t** rootp)
+{
+	uint64_t root = 0;
+	int i, vcpu_count = atomic_read(&(kvm->online_vcpus));
+	for(i = 0; i < vcpu_count; i++)
+	{
+		struct kvm_vcpu* vcpu = kvm_get_vcpu(kvm, i);
+		uint64_t root_of_vcpu;
+		if(!vcpu) {
+			printk(KERN_DEBUG "[ptdump] vcpu[%d] of pid: %d is uncreated\n",
+					i, kvm->userspace_pid);
+			continue;
+		}
+		if(!(root_of_vcpu = vcpu->arch.mmu.root_hpa)) {
+			printk(KERN_DEBUG "[ptdump] vcpu[%d] is uninitialized\n", i);
+			continue;
+		}
+		if(!root)
+			root = root_of_vcpu;
+		else if(root != root_of_vcpu)
+			printk(KERN_DEBUG "[ptdump] ept root of vcpu[%d] is %llx, different from other vcpus\n",
+					i, root_of_vcpu);
+	}
+	(*rootp) = root ? (uint64_t*)__va(root) : NULL;
+	return 0;
+}
 
 /*
  * ============================================================================
  * Getting the task mm struct
  * ============================================================================
  */
-
-
 static pgd_t *get_task_pgd(int pid, struct task_struct *task)
 {
-    mm = get_task_mm(task);
-    if (!mm)
-        return NULL;
+	int retval;
 
-    return mm->pgd;
+	/* select host or extended page tables */
+	if (pgtables_type == PTDUMP_REGULAR) {
+		mm = get_task_mm(task);
+		if (!mm)
+			return NULL;
+		return mm->pgd;
+	}
+	/* enter into virtualization specific dumping */
+	retval = get_kvm_by_vpid(pid);
+	if (retval) {
+		printk(KERN_DEBUG"[ptdump] Unable to find associated KVM for the given PID\n");
+		return NULL;
+	}
+	if (pgtables_type == PTDUMP_ePT) {
+		uint64_t *ept_root = NULL;
+		printk(KERN_DEBUG"[ptdump] dumping KVM's ePT\n");
+		/* get extended page table root pointer */
+		retval = get_ept_root(&ept_root);
+		if (retval)
+			goto error;
+		return (pgd_t *)ept_root;
+	} else if (pgtables_type == PTDUMP_sPT) {
+		uint64_t *shadow_root = NULL;
+		printk(KERN_DEBUG"[ptdump] dumping KVM's shadow PT\n");
+		/* get shadow page table root pointer*/
+		if (shadow_root)
+			return (pgd_t *)shadow_root;
+
+		retval = get_kvm_largest_shadow_root(&shadow_root);
+		if (retval)
+			goto error;
+		return (pgd_t *)shadow_root;
+	}
+error:
+	printk(KERN_DEBUG"[ptdump] Unable to get to the root of KVM page table\n");
+	return NULL;
 }
 
 static void put_task_pgd(void)
 {
-    mmput(mm);
+	if (pgtables_type == PTDUMP_REGULAR)
+		mmput(mm);
+	else if (pgtables_type == PTDUMP_ePT || pgtables_type == PTDUMP_sPT)
+		refcount_dec(&kvm->users_count);
+	return;
 }
-
 
 /*
  * ============================================================================
  * NUMA Region Dumping
  * ============================================================================
  */
-
-
 static long export_numa_map(void *user_buf, unsigned user_buf_bytes)
 {
     unsigned long base, limit;
@@ -267,7 +491,6 @@ static long export_numa_map(void *user_buf, unsigned user_buf_bytes)
  * CRC-Calculation
  * ============================================================================
  */
-
 static unsigned int crc32_for_byte(unsigned int r) 
 {
     int j;
@@ -387,7 +610,6 @@ static int ptdump_crc32(struct task_struct *task, pgd_t *start, unsigned ptstart
  * Page-Table Dumping
  * ============================================================================
  */
-
 static void ptdump_dump_table(void **userbuf, unsigned long *offset, 
                               unsigned long base, unsigned long va, unsigned level)
 {
@@ -494,7 +716,6 @@ static int ptdump_dump(struct task_struct *task, pgd_t *start, unsigned ptstart,
  * Page-Table Range Dumps
  * ============================================================================
  */
-
 static void update_range(unsigned long *base, unsigned long *limit, 
                          unsigned long addr, unsigned long size)
 {
@@ -641,7 +862,6 @@ static int ptdump_range(struct task_struct *task, pgd_t *start,
  * I/O CTL Handler Function
  * ============================================================================
  */
-
 static long ptdump_ioctl(struct file *file, unsigned int cmd, unsigned long param)
 {
     struct pid *pids;
@@ -734,13 +954,11 @@ struct file_operations ptdump_ops = {
     .compat_ioctl   = ptdump_ioctl
 };
 
-
 /*
  * ============================================================================
  * module init / exit functions
  * ============================================================================
  */
-
 static int __init page_table_dump_init(void) {
        
     printk(KERN_DEBUG "[ptdump] initializing module.\n");

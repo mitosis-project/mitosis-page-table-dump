@@ -75,7 +75,7 @@
 #define PTDUMP_IOCTL_CMD_DUMP     0x3
 
 
-#define MAX_VASPACE_DUMP (512UL << 30)
+#define MAX_VASPACE_DUMP (2048UL << 30)
 #define NUM_L4 1                                    /// 1
 #define NUM_L3 (MAX_VASPACE_DUMP / (512UL << 30))    /// 1
 #define NUM_L2 (MAX_VASPACE_DUMP / (1UL << 30))      /// 512
@@ -180,5 +180,17 @@ struct nodemap
     int nr_nodes;
     struct numa_node_info node[MAX_NR_NODES];
 };
+
+/*
+ * We save several choices for page tables at the host level in
+ * a virtualized system. Use this to configure which one should be
+ * dumped.
+ * 0 (default): Host Page Tables -- this is the only valid input for unvirtualized case
+ * 1 : Extended Page Tables
+ */
+#define PTDUMP_IOCTL_PGTABLES_TYPE      0x7
+#define PTDUMP_REGULAR                  0x0
+#define PTDUMP_ePT                      0x1
+#define PTDUMP_sPT                      0x2
 
 #endif /// __PAGE_TABLE_DUMP_H_
