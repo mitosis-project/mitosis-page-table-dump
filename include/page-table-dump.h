@@ -75,6 +75,9 @@
 #define PTDUMP_IOCTL_CMD_DUMP     0x3
 
 
+/*
+ * Maximum virtual address space size.
+ */
 #define MAX_VASPACE_DUMP (2048UL << 30)
 #define NUM_L4 1                                    /// 1
 #define NUM_L3 (MAX_VASPACE_DUMP / (512UL << 30))    /// 1

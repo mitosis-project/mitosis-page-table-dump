@@ -70,14 +70,10 @@ MODULE_VERSION("1.00");
 #define OPT_DUMP_L2 1    
 #define OPT_DUMP_L1 1
 
-
 #define IDENT_L4 "  "
 #define IDENT_L3 "    "
 #define IDENT_L2 "      "
 #define IDENT_L1 "        "
-
-
-
 
 ///< typedef for the page-table dumping handler function
 typedef int (*ptdump_fn_t)( struct task_struct *task, pgd_t *start, 
@@ -86,27 +82,17 @@ typedef int (*ptdump_fn_t)( struct task_struct *task, pgd_t *start,
 // stores the proc fs file information
 static struct proc_dir_entry *ptdump_proc;
 
-
 /*
  * ============================================================================
  * macro for checking accesses to the kernel Module
  * ============================================================================
  */
 
-
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5,0,0)
 #define memory_user_accessible(_addr, _size) access_ok(VERIFY_WRITE, _addr, _size)
 #else
 #define memory_user_accessible(_addr, _size) access_ok(_addr, _size)
 #endif
-
-
-/*
- * ============================================================================
- * x86_64 Page-Table Layout
- * ============================================================================
- */
-
 
 ///< the size of a page-table entry
 #define X86_64_PAGING_ENTRY_SIZE 64
@@ -125,8 +111,10 @@ static struct proc_dir_entry *ptdump_proc;
                             + (l3) * HUGE_PAGE_SIZE \
                             + (l4) * SUPER_PAGE_SIZE)
 
-/* 
+/*
+ * ============================================================================
  * x86_64 Page-Table Layout
+ * ============================================================================
  */
 union ptable_entry {
     uint64_t raw;
@@ -891,7 +879,10 @@ static long ptdump_ioctl(struct file *file, unsigned int cmd, unsigned long para
             break;
         case PTDUMP_IOCTL_NUMA_NODEMAP:
             user_buf_bytes = sizeof(struct nodemap);
-                return export_numa_map(user_buf, user_buf_bytes);    
+            return export_numa_map(user_buf, user_buf_bytes);
+	case PTDUMP_IOCTL_PGTABLES_TYPE:
+	    pgtables_type = param;
+	    return 0;
         default :
             return PTDUMP_ERR_CMD_INVALID;
     }
