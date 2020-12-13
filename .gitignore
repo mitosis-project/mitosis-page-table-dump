@@ -5,3 +5,5 @@ bin
 *.ko
 *.mod
 *.mod.c
+*.cache.mk
+*.o
