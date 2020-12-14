@@ -1,24 +1,21 @@
-/* 
+/*
     Copyright (C) 2018-2019 VMware, Inc.
     SPDX-License-Identifier: GPL-2.0
-
     Linux kernel module to dump process page-tables.
     The kernel-module is free software; you can redistribute it and/or
     modify it under the terms of the GNU General Public
     License as published by the Free Software Foundation; version 2.
-
     The kernel-module  is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
     General Public License for more details.
     You should find a copy of v2 of the GNU General Public License somewhere
     on your Linux system; if not, write to the Free Software Foundation,
-    Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA 
+    Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
 */
 
-/* ioctl interface of the page-table dumping facility */
-#ifndef __PAGE_TABLE_DUMP_H_
-#define __PAGE_TABLE_DUMP_H_ 1
+/* ioctl interface of the pagetable dump facility */
+
 
 #define PARAM_GET_PTR(p) (void *)(p & 0xffffffffffff)
 #define PARAM_GET_BITS(p) (p >> 48)
@@ -192,8 +189,6 @@ struct nodemap
  * 1 : Extended Page Tables
  */
 #define PTDUMP_IOCTL_PGTABLES_TYPE      0x7
-#define PTDUMP_REGULAR                  0x0
-#define PTDUMP_ePT                      0x1
-#define PTDUMP_sPT                      0x2
-
-#endif /// __PAGE_TABLE_DUMP_H_
+#define PTDUMP_REGULAR		        0x0
+#define PTDUMP_ePT	                0x1
+#define PTDUMP_sPT	                0x2

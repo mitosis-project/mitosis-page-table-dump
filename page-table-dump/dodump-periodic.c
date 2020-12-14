@@ -1,23 +1,21 @@
-/* 
+/*
     Copyright (C) 2018-2019 VMware, Inc.
     SPDX-License-Identifier: GPL-2.0
-
     Linux kernel module to dump process page-tables.
     The kernel-module is free software; you can redistribute it and/or
     modify it under the terms of the GNU General Public
     License as published by the Free Software Foundation; version 2.
-
     The kernel-module  is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
     General Public License for more details.
     You should find a copy of v2 of the GNU General Public License somewhere
     on your Linux system; if not, write to the Free Software Foundation,
-    Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA 
+    Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
 */
 
 #include <stdio.h>
-#include <fcntl.h>      /* open */ 
+#include <fcntl.h>      /* open */
 #include <unistd.h>     /* exit */
 #include <sys/ioctl.h>  /* ioctl */
 #include <sys/mman.h>  /* mlock */
@@ -54,21 +52,22 @@ void dump_numa_info(struct nodemap *map, FILE *opt_file_out)
  * 0: Regular host page tables
  * 1: KVM VM's extended page tables
  * 2: KVM VM's shadow page tables
- */
+*/
 int main(int argc, char *argv[])
 {
     long c;
 
     if (argc < 3) {
-        printf("Usage: dodump <pid> <0|1|2> [outfile]\n");
+        printf("Usage: dodump <pid> <0|1> [outfile]\n");
         return -1;
     }
-    
+
     long pid = strtol(argv[1], NULL, 10);
 
     if (pid == 0) {
         pid = getpid();
     }
+
     long pgtables_type = strtol(argv[2], NULL, 10);
     if (!(pgtables_type == PTDUMP_REGULAR || pgtables_type == PTDUMP_ePT)) {
         printf("Please enter a valid ptables identifier (argument #2). Valid values:\n");
@@ -84,11 +83,18 @@ int main(int argc, char *argv[])
     if (opt_file_out == NULL) {
         opt_file_out = stdout;
     }
-    
+
     int f = open("/proc/ptdump", 0);
     if (f < 0) {
         printf ("Can't open device file: %s\n", "/proc/ptdump");
         return -1;
+    }
+
+    c = ioctl(f, PTDUMP_IOCTL_PGTABLES_TYPE, pgtables_type);
+    if (c < 0) {
+        printf("Error while setting pgtables_type\n");
+        return -1;
+
     }
 
     struct nodemap *numa_map = calloc(1, sizeof(*numa_map));
@@ -109,8 +115,8 @@ int main(int argc, char *argv[])
     if (!result) {
         return -1;
     }
-    
-    mlockall(MCL_CURRENT | MCL_FUTURE | MCL_ONFAULT); 
+
+    mlockall(MCL_CURRENT | MCL_FUTURE | MCL_ONFAULT);
 
     while(1) {
         /* check if the pid still exists before collecting dump.
@@ -122,7 +128,7 @@ int main(int argc, char *argv[])
 
         result->processid = pid;
 
-        c = ioctl(f, PTDUMP_IOCTL_MKCMD(PTDUMP_IOCTL_CMD_DUMP, 0, 256), 
+        c = ioctl(f, PTDUMP_IOCTL_MKCMD(PTDUMP_IOCTL_CMD_DUMP, 0, 256),
                      PTDUMP_IOCTL_MKARGBUF(result, 0));
         if (c < 0) {
             fprintf(opt_file_out,"<ptdump process=\"%ld\" error=\"%ld\"></ptdump>\n", pid, c);
@@ -136,7 +142,7 @@ int main(int argc, char *argv[])
                     continue;
                 }
                 fprintf(opt_file_out, "<level%d b=\"%lx\">", level, PTABLE_BASE_MASK(result->table[i].base) >> 12);
-                
+
                 for (int j = 0; j < 512; j++) {
                     char *prefix = "";
 
@@ -169,7 +175,7 @@ int main(int argc, char *argv[])
                             } else {
                                 fprintf(opt_file_out, "%s%lx ", prefix, PTABLE_BASE_MASK(result->table[i].entries[j]) >> 21);
                             }
-                           
+
                             break;
                         case 3:
                             if (!(result->table[i].entries[j] & 0x1)) {
@@ -188,7 +194,7 @@ int main(int argc, char *argv[])
                                 /* just print out the entry, if it belongs to the user space */
                                 fprintf(opt_file_out, "%lx ", PTABLE_BASE_MASK(result->table[i].entries[j]) >> 12);
                             }
-                            
+
                             break;
                         default:
                             continue;
@@ -200,15 +206,15 @@ int main(int argc, char *argv[])
         fprintf(opt_file_out,"</ptdump>\n");
         fflush(opt_file_out);
         wait_and_dump_next:
-        usleep(30000000);        
+        usleep(30000000);
     }
-    
+
     free(result);
-    close(f); 
+    close(f);
     #define CONFIG_SHM_FILE_NAME "/tmp/ptdump-bench"
     FILE *fd = fopen(CONFIG_SHM_FILE_NAME ".done", "w");
     if (!fd) {
-        fprintf (stderr, "ERROR: ptdump could not create the shared file descriptor\n");
+	fprintf (stderr, "ERROR: ptdump could not create the shared file descriptor\n");
     }
     return 0;
 }
