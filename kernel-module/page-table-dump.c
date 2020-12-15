@@ -23,6 +23,7 @@
 #include <linux/sched.h>
 #include <asm/pgtable.h>
 
+#include <linux/version.h>
 #include <linux/debugfs.h>
 #include <linux/kasan.h>
 #include <linux/mm.h>
@@ -95,6 +96,18 @@ static struct proc_dir_entry *ptdump_proc;
 
 
 #define TABLEADDR(_type, _pa)
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,0,0)
+#define memory_user_accessible(_addr, _size) access_ok(VERIFY_WRITE, _addr, _size)
+#else
+#define memory_user_accessible(_addr, _size) access_ok(_addr, _size)
+#endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,20,0)
+#define KVM_VCPU_MMU_ROOT	(vcpu->arch.mmu.root_hpa)
+#else
+#define KVM_VCPU_MMU_ROOT	(vcpu->arch.mmu->root_hpa)
+#endif
 
 /*
  * ============================================================================
@@ -294,7 +307,7 @@ static int get_vcpu_shadow_root(uint64_t **rootp, int index)
 		printk(KERN_DEBUG"[ptdump] vcpu %d is not initialized\n", index);
 		return -1;
 	}
-	root = vcpu->arch.mmu.root_hpa;
+	root = KVM_VCPU_MMU_ROOT;
 	if (!root || !VALID_PAGE(root)) {
 		printk(KERN_DEBUG"[ptdump] Invalid root for vcpu: %d\n", index);
 		return -1;
@@ -317,10 +330,10 @@ static int get_kvm_largest_shadow_root(uint64_t **rootp)
 		if (!vcpu)
 			continue;
 
-		if (!vcpu->arch.mmu.root_hpa || !VALID_PAGE(vcpu->arch.mmu.root_hpa))
+		if (!KVM_VCPU_MMU_ROOT || !VALID_PAGE(KVM_VCPU_MMU_ROOT))
 			continue;
 
-		nr_pages = get_vcpu_spt_reach((pgd_t *)__va(vcpu->arch.mmu.root_hpa));
+		nr_pages = get_vcpu_spt_reach((pgd_t *)__va(KVM_VCPU_MMU_ROOT));
 		if (nr_pages > max_pages) {
 			max_pages = nr_pages;
 			best_vcpu = i;
@@ -351,7 +364,7 @@ static int get_ept_root(uint64_t** rootp)
 					i, kvm->userspace_pid);
 			continue;
 		}
-		if(!(root_of_vcpu = vcpu->arch.mmu.root_hpa)) {
+		if(!(root_of_vcpu = KVM_VCPU_MMU_ROOT)) {
 			printk(KERN_DEBUG "[ptdump] vcpu[%d] is uninitialized\n", i);
 			continue;
 		}
@@ -435,7 +448,7 @@ static long export_numa_map(void *user_buf, unsigned user_buf_bytes)
 	void *curr;
 
 	printk(KERN_DEBUG "[ptdump] Exporting numa map. #nodes: %d\n", nr_node_ids);
-	if(!access_ok(VERIFY_WRITE, user_buf, user_buf_bytes))
+	if(!memory_user_accessible(user_buf, user_buf_bytes))
 		return PTDUMP_ERR_ACCESS_RIGHTS;
 
 	curr = user_buf + offsetof(struct nodemap, node);
@@ -844,7 +857,7 @@ static long ptdump_ioctl(struct file *file, unsigned int cmd, unsigned long para
 			return PTDUMP_ERR_CMD_INVALID;
 	}
 
-	if(!access_ok(VERIFY_WRITE, user_buf, user_buf_bytes)) {
+	if(!memory_user_accessible(user_buf, user_buf_bytes)) {
 		return PTDUMP_ERR_ACCESS_RIGHTS;
 	}
 
